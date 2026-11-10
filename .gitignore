@@ -5,11 +5,45 @@ __pycache__/
 *.so
 *.pyd
 
+# Build outputs and local runtime files
+artifacts/
+build/
+dist/
+logs/
+/screenshots/
+*.exe
+*.exe~
+*.dll
+*.dylib
+*.pdb
+*.test
+coverage.out
+coverage.html
+
+# Archives and compressed dumps
+*.zip
+*.7z
+*.tar
+*.gz
+*.rar
+
 # Virtual environments
 .venv/
 venv/
 env/
 ENV/
+
+# Environments and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.ppk
+/IvoryGoblin_*.tar
+/IvoryGoblin_Codebase_*.tar
 
 # Local Whisper models & Hugging Face caches
 models/
@@ -28,6 +62,23 @@ bin/
 ffmpeg.exe
 ffprobe.exe
 
+# Dependencies and OS junk
+node_modules/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+.gemini/
+*.swp
+*.bak
+*.tmp
+
+# Databases and dumps
+*.sqlite
+*.db
+data/
+
 # Media files (input audio/video)
 *.mp4
 *.mkv
@@ -45,13 +96,3 @@ ffprobe.exe
 *_timestamps.txt
 Общая_расшифровка_текст.txt
 Общая_расшифровка_таймкоды.txt
-
-# OS & IDE metadata
-.DS_Store
-Thumbs.db
-Desktop.ini
-.vscode/
-.idea/
-*.swp
-*.bak
-*.tmp
