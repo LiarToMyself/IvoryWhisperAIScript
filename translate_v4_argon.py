@@ -42,7 +42,6 @@ def setup_nvidia_dlls() -> tuple[bool, bool]:
         if not isinstance(path, str) or not os.path.isdir(path):
             continue
 
-        # Проверяем пакеты nvidia/* и ctranslate2/
         for subdir in ("nvidia", "ctranslate2"):
             base = os.path.join(path, subdir)
             if not os.path.isdir(base):
@@ -68,7 +67,6 @@ def setup_nvidia_dlls() -> tuple[bool, bool]:
                             except Exception:
                                 pass
 
-    # Также проверяем системный PATH / установленный CUDA Toolkit
     for dll_name, flag_name in (("cublas64_12.dll", "cublas"), ("cudnn64_9.dll", "cudnn")):
         for dir_entry in os.environ.get("PATH", "").split(os.pathsep):
             if dir_entry and os.path.isfile(os.path.join(dir_entry, dll_name)):
@@ -83,11 +81,12 @@ def setup_nvidia_dlls() -> tuple[bool, bool]:
 
 has_cublas, has_cudnn = setup_nvidia_dlls()
 
-# --- 2. ИСПРАВЛЕНИЕ SSL, ТАЙМАУТОВ HUGGING FACE И ЗЕРКАЛА ---
+# --- 2. НАСТРОЙКА СКАЧИВАНИЯ HUGGING FACE (ОТКЛЮЧЕНИЕ ЗАВИСАЮЩЕГО XET НА WINDOWS) ---
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
-os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "30")
-os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "15")
+os.environ["HF_HUB_DISABLE_XET"] = "1"
+os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "60")
+os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "30")
 
 try:
     import certifi
@@ -117,7 +116,6 @@ try:
         _supports_metadata_errors = False
 
     def _patched_av_open(*args, **kwargs):
-        """Совместимость faster-whisper <=1.2.1 с PyAV 18+/19+ (удален metadata_errors, Issue #1589)."""
         if not _supports_metadata_errors:
             kwargs.pop("metadata_errors", None)
             kwargs.pop("metadata_encoding", None)
@@ -132,15 +130,12 @@ try:
 
     av.open = _patched_av_open
 except ImportError:
-    # Если PyAV не установлен (например, минимальная среда Python 3.15),
-    # создаем легковесную заглушку, чтобы импорт faster_whisper.audio не падал.
     _av_stub = types.ModuleType("av")
     _av_stub.open = None  # type: ignore[attr-defined]
     sys.modules["av"] = _av_stub
 
 
 def _find_ffmpeg_exe() -> str | None:
-    """Ищет ffmpeg.exe в папке скрипта, ./ffmpeg/bin или системном PATH."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     local_candidates = (
         os.path.join(script_dir, "ffmpeg.exe"),
@@ -158,7 +153,6 @@ def decode_audio_ffmpeg(
     sampling_rate: int = 16000,
     split_stereo: bool = False,
 ):
-    """Декодирует аудио через системный/портативный ffmpeg.exe в float32 NumPy массив."""
     ffmpeg_bin = _find_ffmpeg_exe()
     if not ffmpeg_bin:
         raise RuntimeError(
@@ -207,8 +201,15 @@ import ctranslate2
 import faster_whisper
 import faster_whisper.audio
 import faster_whisper.transcribe
+import faster_whisper.utils
 import faster_whisper.vad
 from faster_whisper import WhisperModel
+
+try:
+    import tqdm
+    faster_whisper.utils.disabled_tqdm = tqdm.tqdm
+except Exception:
+    pass
 
 _orig_fw_decode_audio = faster_whisper.audio.decode_audio
 
@@ -218,7 +219,6 @@ def _hybrid_decode_audio(
     sampling_rate: int = 16000,
     split_stereo: bool = False,
 ):
-    """Использует пропатченный PyAV (включая cp312-abi3 на Python 3.14/3.15) с откатом на ffmpeg.exe."""
     if isinstance(input_file, np.ndarray):
         return input_file
     if HAS_PYAV:
@@ -246,7 +246,6 @@ def _hybrid_decode_audio(
     raise RuntimeError("Пакет 'av' (PyAV) не установлен, а входные данные не являются путем к файлу.")
 
 
-# Переопределяем decode_audio во всех модулях faster_whisper (в transcribe.py он импортирован напрямую)
 faster_whisper.audio.decode_audio = _hybrid_decode_audio
 faster_whisper.transcribe.decode_audio = _hybrid_decode_audio
 faster_whisper.decode_audio = _hybrid_decode_audio
@@ -258,7 +257,6 @@ def _linear_collect_chunks(
     sampling_rate: int = 16000,
     max_duration: float = float("inf"),
 ):
-    """Линейный O(N) патч collect_chunks (фикс SYSTRAN/faster-whisper#1690 / PR #1692)."""
     if not chunks:
         chunk_metadata = {
             "offset": 0,
@@ -320,7 +318,6 @@ except Exception:
 
 
 def is_vad_available() -> bool:
-    """Проверяет доступность onnxruntime для работы Silero VAD (отсутствует на Python 3.15 в ноябре 2026)."""
     try:
         import onnxruntime  # noqa: F401
         return True
@@ -333,7 +330,6 @@ HAS_ONNXRUNTIME = is_vad_available()
 
 
 def get_gpu_info() -> str:
-    """Динамически определяет название GPU и объем VRAM через nvidia-smi."""
     smi = shutil.which("nvidia-smi")
     if not smi:
         default_smi = os.path.join(
@@ -372,17 +368,176 @@ def format_timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
+_MODEL_REPOS = {
+    "large-v3-turbo": [
+        "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+        "rtlingo/mobiuslabsgmbh-faster-whisper-large-v3-turbo",
+        "deepdml/faster-whisper-large-v3-turbo-ct2",
+    ],
+    "medium": [
+        "Systran/faster-whisper-medium",
+    ],
+}
+
+
 def resolve_local_model_dir(model_name: str) -> str | None:
-    """Проверяет наличие оффлайн-модели в папке ./models/<model_name>."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     candidates = [os.path.join(script_dir, "models", model_name)]
     if model_name == "large-v3-turbo":
         candidates.append(os.path.join(script_dir, "models", "turbo"))
         candidates.append(os.path.join(script_dir, "models", "faster-whisper-large-v3-turbo"))
+
+    # Также проверяем стандартный кэш Hugging Face, если модель уже была скачана ранее
+    hf_home = os.environ.get("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
+    hub_dir = os.path.join(hf_home, "hub")
+    for repo_id in _MODEL_REPOS.get(model_name, []):
+        snap_root = os.path.join(hub_dir, "models--" + repo_id.replace("/", "--"), "snapshots")
+        if os.path.isdir(snap_root):
+            for sub in os.listdir(snap_root):
+                candidates.append(os.path.join(snap_root, sub))
+
     for folder in candidates:
-        if os.path.isdir(folder) and os.path.isfile(os.path.join(folder, "model.bin")):
-            return folder
+        bin_path = os.path.join(folder, "model.bin")
+        cfg_path = os.path.join(folder, "config.json")
+        if os.path.isdir(folder) and os.path.isfile(bin_path) and os.path.isfile(cfg_path):
+            if os.path.getsize(bin_path) > 50_000_000:
+                return folder
     return None
+
+
+def _download_single_file(url: str, dest_path: str, desc: str, required: bool = True) -> bool:
+    part_path = dest_path + ".part"
+    existing_size = os.path.getsize(part_path) if os.path.isfile(part_path) else 0
+    headers = {"User-Agent": "faster-whisper-downloader/1.0"}
+    if existing_size > 0:
+        headers["Range"] = f"bytes={existing_size}-"
+
+    try:
+        import requests
+        from tqdm import tqdm
+
+        resp = requests.get(url, headers=headers, stream=True, timeout=(15, 60), allow_redirects=True)
+        if resp.status_code == 404 and not required:
+            resp.close()
+            return False
+        if resp.status_code == 416:
+            resp.close()
+            if os.path.isfile(part_path):
+                os.replace(part_path, dest_path)
+            return True
+        if resp.status_code not in (200, 206):
+            resp.close()
+            resp.raise_for_status()
+
+        mode = "ab" if resp.status_code == 206 else "wb"
+        if mode == "wb":
+            existing_size = 0
+
+        content_len = int(resp.headers.get("Content-Length", 0) or 0)
+        total_size = (existing_size + content_len) if content_len > 0 else None
+
+        with open(part_path, mode) as f_out, tqdm(
+            total=total_size,
+            initial=existing_size,
+            unit="B",
+            unit_scale=True,
+            unit_divisor=1024,
+            desc=f"    {desc}",
+            ncols=88,
+            file=sys.stdout,
+        ) as bar:
+            for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    f_out.write(chunk)
+                    bar.update(len(chunk))
+
+        os.replace(part_path, dest_path)
+        return True
+    except ImportError:
+        import urllib.request
+        import urllib.error
+
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                status = getattr(resp, "status", 200)
+                mode = "ab" if status == 206 else "wb"
+                if mode == "wb":
+                    existing_size = 0
+                content_len = int(resp.headers.get("Content-Length", 0) or 0)
+                total_mb = ((existing_size + content_len) / (1024 * 1024)) if content_len > 0 else 0
+                downloaded = existing_size
+                with open(part_path, mode) as f_out:
+                    while True:
+                        chunk = resp.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        f_out.write(chunk)
+                        downloaded += len(chunk)
+                        dl_mb = downloaded / (1024 * 1024)
+                        if total_mb > 0:
+                            print(f"\r    {desc}: {dl_mb:.1f} / {total_mb:.1f} МБ ({dl_mb * 100 / total_mb:.0f}%)", end="", flush=True)
+                        else:
+                            print(f"\r    {desc}: {dl_mb:.1f} МБ", end="", flush=True)
+                print()
+            os.replace(part_path, dest_path)
+            return True
+        except urllib.error.HTTPError as he:
+            if he.code == 404 and not required:
+                return False
+            raise
+
+
+def ensure_model_downloaded(model_name: str) -> str:
+    """Скачивает CTranslate2-веса модели в ./models/<model_name> с прогресс-баром и докачкой."""
+    local_dir = resolve_local_model_dir(model_name)
+    if local_dir:
+        return local_dir
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    target_dir = os.path.join(script_dir, "models", model_name)
+    os.makedirs(target_dir, exist_ok=True)
+
+    repos = _MODEL_REPOS.get(model_name)
+    if not repos:
+        default_repo = getattr(faster_whisper.utils, "_MODELS", {}).get(model_name, model_name)
+        repos = [default_repo]
+
+    endpoints = ["https://huggingface.co", "https://hf-mirror.com"]
+    files_spec = [
+        ("config.json", True),
+        ("preprocessor_config.json", False),
+        ("tokenizer.json", True),
+        ("vocabulary.json", False),
+        ("vocabulary.txt", False),
+        ("model.bin", True),
+    ]
+
+    print(f"\n[*] Модель '{model_name}' еще не скачана. Загрузка в папку: {target_dir}")
+    print("[*] Скачивание идет один раз (с поддержкой докачки при обрыве связи)...")
+
+    last_err = None
+    for endpoint in endpoints:
+        for repo_id in repos:
+            try:
+                print(f"[*] Источник: {endpoint}/{repo_id}")
+                for fname, is_req in files_spec:
+                    final_path = os.path.join(target_dir, fname)
+                    if os.path.isfile(final_path):
+                        if fname != "model.bin" or os.path.getsize(final_path) > 50_000_000:
+                            continue
+                    url = f"{endpoint}/{repo_id}/resolve/main/{fname}"
+                    _download_single_file(url, final_path, fname, required=is_req)
+
+                resolved = resolve_local_model_dir(model_name)
+                if resolved:
+                    print(f"[✓] Модель '{model_name}' успешно скачана в {resolved}!")
+                    return resolved
+            except Exception as exc:
+                last_err = exc
+                print(f"[!] Сбой загрузки с {endpoint}/{repo_id}: {exc}")
+
+    raise RuntimeError(f"Не удалось скачать модель '{model_name}': {last_err}")
 
 
 def instantiate_whisper_model(
@@ -391,47 +546,24 @@ def instantiate_whisper_model(
     compute_type: str,
     cpu_threads: int = 4,
 ) -> WhisperModel:
-    """Создает экземпляр WhisperModel с приоритетом локальной папки ./models и зеркала HF."""
-    local_dir = resolve_local_model_dir(model_name)
-    if local_dir:
-        print(f"[*] Используется локальная модель из папки: {local_dir}")
-        return WhisperModel(
-            local_dir,
-            device=device,
-            compute_type=compute_type,
-            cpu_threads=cpu_threads,
-            local_files_only=True,
-        )
-
-    # Попытка загрузки через текущее зеркало (по умолчанию https://hf-mirror.com)
-    try:
-        return WhisperModel(
-            model_name,
-            device=device,
-            compute_type=compute_type,
-            cpu_threads=cpu_threads,
-        )
-    except Exception as primary_exc:
-        # Если зеркало недоступно, пробуем прямое подключение к huggingface.co
-        current_endpoint = os.environ.get("HF_ENDPOINT", "")
-        if "hf-mirror.com" in current_endpoint:
-            print(f"[!] Зеркало {current_endpoint} недоступно ({primary_exc}), повтор через huggingface.co...")
-            os.environ["HF_ENDPOINT"] = "https://huggingface.co"
-            return WhisperModel(
-                model_name,
-                device=device,
-                compute_type=compute_type,
-                cpu_threads=cpu_threads,
-            )
-        raise
+    local_dir = ensure_model_downloaded(model_name)
+    return WhisperModel(
+        local_dir,
+        device=device,
+        compute_type=compute_type,
+        cpu_threads=cpu_threads,
+        local_files_only=True,
+    )
 
 
 def load_whisper_model(model_size: str = "large-v3-turbo") -> tuple[WhisperModel, str]:
-    """Загружает модель с квантованием под 4 ГБ VRAM (GTX 1650 Ti) и резервным откатом."""
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     audio_backend = "PyAV (av)" if HAS_PYAV else ("ffmpeg.exe" if _find_ffmpeg_exe() else "не найден")
     vad_status = "Включен (Silero VAD / onnxruntime)" if HAS_ONNXRUNTIME else "Отключен (нет onnxruntime для этой версии Python)"
     print(f"[*] Среда: Python {py_ver} | Аудио-декодер: {audio_backend} | VAD: {vad_status}")
+
+    # Сначала гарантируем наличие скачанной модели с наглядным прогресс-баром
+    ensure_model_downloaded(model_size)
 
     cuda_available = False
     try:
@@ -447,8 +579,6 @@ def load_whisper_model(model_size: str = "large-v3-turbo") -> tuple[WhisperModel
             )
 
         gpu_label = get_gpu_info()
-        # int8_float16: ~1.5 ГБ VRAM на Turing (CC 7.5).
-        # При баге FP16 на конкретной версии cuDNN на GTX 1650 Ti можно сменить на "int8_float32".
         for candidate_model, compute_type in (
             (model_size, "int8_float16"),
             (model_size, "int8_float32"),
@@ -483,7 +613,6 @@ def load_whisper_model(model_size: str = "large-v3-turbo") -> tuple[WhisperModel
 
 
 def release_whisper_vram(model: WhisperModel) -> None:
-    """Принудительно освобождает C++ буферы CTranslate2 в VRAM даже при живой внешней ссылке."""
     try:
         if hasattr(model, "model"):
             del model.model
@@ -499,7 +628,6 @@ def transcribe_file_with_fallback(
     f_txt,
     f_timed,
 ) -> tuple[WhisperModel, str]:
-    """Транскрибирует файл; при CUDA OOM откатывает частичную запись и переключается на резерв."""
     use_vad = HAS_ONNXRUNTIME
     transcribe_kwargs = dict(
         beam_size=1,
