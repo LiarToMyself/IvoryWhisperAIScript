@@ -1,0 +1,57 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Local Whisper models & Hugging Face caches
+models/
+*.bin
+*.onnx
+*.safetensors
+*.pt
+*.pth
+*.incomplete
+.cache/
+huggingface_cache/
+
+# Local FFmpeg binaries
+ffmpeg/
+bin/
+ffmpeg.exe
+ffprobe.exe
+
+# Media files (input audio/video)
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.mp3
+*.wav
+*.m4a
+*.webm
+*.flac
+*.ogg
+
+# Transcription output artifacts
+*_text.txt
+*_timestamps.txt
+Общая_расшифровка_текст.txt
+Общая_расшифровка_таймкоды.txt
+
+# OS & IDE metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
+*.swp
+*.bak
+*.tmp
