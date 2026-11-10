@@ -18,11 +18,25 @@ if not exist "translate_v4_argon.py" (
     exit /b 1
 )
 
-set "REQ_PY=%~1"
+set "REQ_PY="
+if "%~1"=="--py" (
+    set "REQ_PY=%~2"
+    shift
+    shift
+    goto :HANDLE_REQ_PY
+)
+if "%~1"=="3.14" if not exist "%~1" (
+    set "REQ_PY=3.14"
+    shift
+    goto :HANDLE_REQ_PY
+)
+if "%~1"=="3.15" if not exist "%~1" (
+    set "REQ_PY=3.15"
+    shift
+    goto :HANDLE_REQ_PY
+)
+
 set "PY_CMD="
-
-if not "%REQ_PY%"=="" goto :HANDLE_REQ_PY
-
 python --version >nul 2>&1
 if not errorlevel 1 (
     set "PY_CMD=python"
@@ -80,7 +94,7 @@ exit /b 1
 echo [*] Запуск скрипта расшифровки через: %PY_CMD%
 echo [*] Зеркало Hugging Face: %HF_ENDPOINT%
 echo.
-%PY_CMD% "translate_v4_argon.py"
+%PY_CMD% "translate_v4_argon.py" %1 %2 %3 %4 %5 %6 %7 %8 %9
 echo.
 pause
 exit /b 0

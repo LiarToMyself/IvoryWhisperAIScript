@@ -11,11 +11,11 @@ color 0A
 title Установка зависимостей для Whisper AI [Python 3.14 / 3.15]
 
 set "REQ_PY=%~1"
-set "LAST_EXE="
+set "SEEN_EXES=|"
 
 if not "%REQ_PY%"=="" goto :HANDLE_REQ_PY
 
-:: Автоматический режим: проверяем python в PATH, затем py -3.14 и py -3.15 (без дублирования одного и того же exe)
+:: Автоматический режим: настраиваем python в PATH, а также py -3.14 и py -3.15 (без повторов для одного и того же python.exe)
 set "FOUND_ANY=0"
 
 python --version >nul 2>&1
@@ -64,7 +64,7 @@ if "%SYS_VER%"=="%REQ_PY%" (
 :: Если установлен Python Install Manager 26.4 (py), предлагаем установить запрошенную ветку
 py --version >nul 2>&1
 if not errorlevel 1 (
-    echo [*] Python %REQ_PY% не найден. Пробуем установить через Python Install Manager: py install %REQ_PY%...
+    echo [*] Python %REQ_PY% не найден. Устанавливаем через Python Install Manager: py install %REQ_PY%...
     py install %REQ_PY%
     py -%REQ_PY% --version >nul 2>&1
     if not errorlevel 1 (
@@ -94,8 +94,10 @@ set "PY_MIN="
 
 for /f "delims=" %%e in ('%CUR_PY% -c "import os, sys; print(os.path.normcase(os.path.abspath(sys.executable)))" 2^>nul') do set "CUR_EXE=%%e"
 if "%CUR_EXE%"=="" goto :EOF
-if "%CUR_EXE%"=="%LAST_EXE%" goto :EOF
-set "LAST_EXE=%CUR_EXE%"
+
+echo "%SEEN_EXES%" | find /i "|%CUR_EXE%|" >nul
+if not errorlevel 1 goto :EOF
+set "SEEN_EXES=%SEEN_EXES%%CUR_EXE%|"
 
 for /f "tokens=1,2 delims=." %%a in ('%CUR_PY% -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2^>nul') do (
     set "PY_MAJ=%%a"
@@ -105,7 +107,7 @@ for /f "tokens=1,2 delims=." %%a in ('%CUR_PY% -c "import sys; print(f'{sys.vers
 echo.
 echo =======================================================
 echo [*] Подготовка среды: %CUR_PY% [Python %PY_MAJ%.%PY_MIN%]
-echo [*] Путь: %CUR_EXE%
+echo [*] Исполняемый файл: %CUR_EXE%
 echo =======================================================
 
 %CUR_PY% -m pip cache purge >nul 2>&1
@@ -131,10 +133,19 @@ echo =======================================================
 echo [*] Создание файла расшифровки translate_v4_argon.py [UTF-8 без BOM]...
 echo =======================================================
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$text = Get-Content -LiteralPath '%~f0' -Raw -Encoding UTF8; $code = $text -replace '(?s)^.*?#---PYTHON_CODE_START---#\r?\n', ''; $utf8NoBom = New-Object System.Text.UTF8Encoding($false); [IO.File]::WriteAllText((Join-Path '%~dp0' 'translate_v4_argon.py'), $code, $utf8NoBom)"
+set "BAT_SELF=%~f0"
+set "OUT_PY=%~dp0translate_v4_argon.py"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$raw = [IO.File]::ReadAllText($env:BAT_SELF, [Text.Encoding]::UTF8); $m = '#' + '---PYTHON_CODE_START---#'; $idx = $raw.LastIndexOf($m); if ($idx -lt 0) { exit 1 }; $code = $raw.Substring($idx + $m.Length).TrimStart(\"`r\", \"`n\"); [IO.File]::WriteAllText($env:OUT_PY, $code, (New-Object System.Text.UTF8Encoding($false)))"
+
+if not exist "%OUT_PY%" (
+    color 0C
+    echo [!] ОШИБКА: Не удалось распаковать translate_v4_argon.py!
+    pause
+    exit /b 1
+)
 
 echo [✓] Скрипт translate_v4_argon.py успешно создан!
-echo [*] Теперь можно закрыть это окно и запускать "Run Whisper.bat".
+echo [*] Теперь можно закрыть это окно и запускать "Run Whisper.bat" (или перетащить видеофайл прямо на него).
 echo.
 pause
 exit /b 0
@@ -729,25 +740,34 @@ def transcribe_file_with_fallback(
     return model, model_size
 
 
-def select_and_transcribe():
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
+def select_and_transcribe(cli_files: list[str] | None = None):
+    valid_cli = [os.path.abspath(p) for p in (cli_files or []) if os.path.isfile(p)]
+    if valid_cli:
+        video_paths = valid_cli
+    else:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
 
-    print("[*] Выберите ОДНО или НЕСКОЛЬКО видео в появившемся окне (через Ctrl или Shift)...")
-    video_paths = filedialog.askopenfilenames(
-        title="Выберите видеофайлы для расшифровки и объединения",
-        filetypes=[
-            ("Видео и Аудио", "*.mp4 *.mkv *.avi *.mov *.mp3 *.wav *.m4a *.webm *.flac *.ogg"),
-            ("Все файлы", "*.*"),
-        ],
-    )
+        print("[*] Выберите ОДНО или НЕСКОЛЬКО видео в появившемся окне (через Ctrl или Shift)...")
+        selected = filedialog.askopenfilenames(
+            title="Выберите видеофайлы для расшифровки и объединения",
+            filetypes=[
+                ("Видео и Аудио", "*.mp4 *.mkv *.avi *.mov *.mp3 *.wav *.m4a *.webm *.flac *.ogg"),
+                ("Все файлы", "*.*"),
+            ],
+        )
+        try:
+            root.destroy()
+        except Exception:
+            pass
 
-    if not video_paths:
-        print("[!] Файлы не выбраны. Завершение работы.")
-        return
+        if not selected:
+            print("[!] Файлы не выбраны. Завершение работы.")
+            return
 
-    video_paths = sorted(list(video_paths))
+        video_paths = sorted(list(selected))
+
     total_files = len(video_paths)
 
     print(f"[+] Выбрано файлов: {total_files}")
@@ -795,4 +815,4 @@ def select_and_transcribe():
 
 
 if __name__ == "__main__":
-    select_and_transcribe()
+    select_and_transcribe(sys.argv[1:])

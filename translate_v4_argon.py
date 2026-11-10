@@ -587,25 +587,34 @@ def transcribe_file_with_fallback(
     return model, model_size
 
 
-def select_and_transcribe():
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
+def select_and_transcribe(cli_files: list[str] | None = None):
+    valid_cli = [os.path.abspath(p) for p in (cli_files or []) if os.path.isfile(p)]
+    if valid_cli:
+        video_paths = valid_cli
+    else:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
 
-    print("[*] Выберите ОДНО или НЕСКОЛЬКО видео в появившемся окне (через Ctrl или Shift)...")
-    video_paths = filedialog.askopenfilenames(
-        title="Выберите видеофайлы для расшифровки и объединения",
-        filetypes=[
-            ("Видео и Аудио", "*.mp4 *.mkv *.avi *.mov *.mp3 *.wav *.m4a *.webm *.flac *.ogg"),
-            ("Все файлы", "*.*"),
-        ],
-    )
+        print("[*] Выберите ОДНО или НЕСКОЛЬКО видео в появившемся окне (через Ctrl или Shift)...")
+        selected = filedialog.askopenfilenames(
+            title="Выберите видеофайлы для расшифровки и объединения",
+            filetypes=[
+                ("Видео и Аудио", "*.mp4 *.mkv *.avi *.mov *.mp3 *.wav *.m4a *.webm *.flac *.ogg"),
+                ("Все файлы", "*.*"),
+            ],
+        )
+        try:
+            root.destroy()
+        except Exception:
+            pass
 
-    if not video_paths:
-        print("[!] Файлы не выбраны. Завершение работы.")
-        return
+        if not selected:
+            print("[!] Файлы не выбраны. Завершение работы.")
+            return
 
-    video_paths = sorted(list(video_paths))
+        video_paths = sorted(list(selected))
+
     total_files = len(video_paths)
 
     print(f"[+] Выбрано файлов: {total_files}")
@@ -653,4 +662,4 @@ def select_and_transcribe():
 
 
 if __name__ == "__main__":
-    select_and_transcribe()
+    select_and_transcribe(sys.argv[1:])
